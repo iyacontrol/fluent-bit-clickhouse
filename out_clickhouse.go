@@ -40,14 +40,14 @@ type Log struct {
 
 //export FLBPluginRegister
 func FLBPluginRegister(ctx unsafe.Pointer) int {
-	return output.FLBPluginRegister(ctx, "out_clickhouse", "Clickhouse Output Plugin.!")
+	return output.FLBPluginRegister(ctx, "clickhouse", "Clickhouse Output Plugin.!")
 }
 
 //export FLBPluginInit
 // ctx (context) pointer to fluentbit context (state/ c code)
 func FLBPluginInit(ctx unsafe.Pointer) int {
 	var host string
-	if v := output.FLBPluginConfigKey(ctx, "host"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "Host"); v != "" {
 		host = v
 	} else {
 		klog.Error("you must set host of clickhouse!")
@@ -55,7 +55,7 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var user string
-	if v := output.FLBPluginConfigKey(ctx, "user"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "User"); v != "" {
 		user = v
 	} else {
 		klog.Error("you must set user of clickhouse!")
@@ -63,21 +63,21 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var password string
-	if v := output.FLBPluginConfigKey(ctx, "password"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "Password"); v != "" {
 		password = v
 	} else {
 		klog.Error("you must set password of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	if v := output.FLBPluginConfigKey(ctx, "database"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "Database"); v != "" {
 		database = v
 	} else {
 		klog.Error("you must set database of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	if v := output.FLBPluginConfigKey(ctx, "table"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "Table"); v != "" {
 		table = v
 	} else {
 		klog.Error("you must set table of clickhouse!")
@@ -85,7 +85,7 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var writeTimeout string
-	if v := output.FLBPluginConfigKey(ctx, "write_timeout"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "Write_Timeout"); v != "" {
 		writeTimeout = v
 	} else {
 		klog.Infof("you set the default write_timeout: %s", DefaultWriteTimeout)
@@ -93,7 +93,7 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var readTimeout string
-	if v := output.FLBPluginConfigKey(ctx, "read_timeout"); v != "" {
+	if v := output.FLBPluginConfigKey(ctx, "Read_Timeout"); v != "" {
 		readTimeout = v
 	} else {
 		klog.Infof("you set the default read_timeout: %s", DefaultReadTimeout)
