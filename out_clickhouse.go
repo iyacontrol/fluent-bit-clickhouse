@@ -4,12 +4,17 @@ import (
 	"C"
 	"database/sql"
 	"fmt"
-	"reflect"
+	"os"
+	"strconv"
+	"sync"
+
+	//"reflect"
 	"time"
 	"unsafe"
 
 	"github.com/fluent/fluent-bit-go/output"
-	"github.com/ugorji/go/codec"
+	//"github.com/ugorji/go/codec"
+    "github.com/kshvakov/clickhouse"
 	klog "k8s.io/klog"
 )
 
@@ -18,13 +23,19 @@ var (
 
 	database  string
 	table     string
+	batchSize int
 
 	insertSQL = "INSERT INTO %s.%s(date, cluster, namespace, app, pod_name, container_name, host, log, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+
+	rw sync.RWMutex
+	buffer = make([]Log, 0)
 )
 
 const (
 	DefaultWriteTimeout string = "20"
 	DefaultReadTimeout  string = "10"
+
+	DefaultBatchSize int = 1024
 )
 
 type Log struct {
@@ -46,8 +57,16 @@ func FLBPluginRegister(ctx unsafe.Pointer) int {
 //export FLBPluginInit
 // ctx (context) pointer to fluentbit context (state/ c code)
 func FLBPluginInit(ctx unsafe.Pointer) int {
+	// init log
+	//klog.InitFlags(nil)
+	//flag.Set("stderrthreshold", "3")
+	//flag.Parse()
+	//
+	//defer klog.Flush()
+
+	// get config
 	var host string
-	if v := output.FLBPluginConfigKey(ctx, "Host"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_HOST"); v != "" {
 		host = v
 	} else {
 		klog.Error("you must set host of clickhouse!")
@@ -55,7 +74,7 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var user string
-	if v := output.FLBPluginConfigKey(ctx, "User"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_USER"); v != "" {
 		user = v
 	} else {
 		klog.Error("you must set user of clickhouse!")
@@ -63,29 +82,41 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var password string
-	if v := output.FLBPluginConfigKey(ctx, "Password"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_PASSWORD"); v != "" {
 		password = v
 	} else {
 		klog.Error("you must set password of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	if v := output.FLBPluginConfigKey(ctx, "Database"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_DATABASE"); v != "" {
 		database = v
 	} else {
 		klog.Error("you must set database of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	if v := output.FLBPluginConfigKey(ctx, "Table"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_TABLE"); v != "" {
 		table = v
 	} else {
 		klog.Error("you must set table of clickhouse!")
 		return output.FLB_ERROR
 	}
 
+	if v := os.Getenv("CLICKHOUSE_BATCH_SIZE"); v != "" {
+		size ,err:=strconv.Atoi(v)
+		if err != nil {
+			klog.Infof("you set the default bacth_size: %d", DefaultBatchSize)
+			batchSize = DefaultBatchSize
+		}
+		batchSize = size
+	} else {
+		klog.Infof("you set the default bacth_size: %d", DefaultBatchSize)
+		batchSize = DefaultBatchSize
+	}
+
 	var writeTimeout string
-	if v := output.FLBPluginConfigKey(ctx, "Write_Timeout"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_WRITE_TIMEOUT"); v != "" {
 		writeTimeout = v
 	} else {
 		klog.Infof("you set the default write_timeout: %s", DefaultWriteTimeout)
@@ -93,7 +124,7 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 	}
 
 	var readTimeout string
-	if v := output.FLBPluginConfigKey(ctx, "Read_Timeout"); v != "" {
+	if v := os.Getenv("CLICKHOUSE_READ_TIMEOUT"); v != "" {
 		readTimeout = v
 	} else {
 		klog.Infof("you set the default read_timeout: %s", DefaultReadTimeout)
@@ -102,16 +133,23 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 
 	dsn := "tcp://" + host + "?username=" + user + "&password=" + password + "&database=" + database + "&write_timeout=" + writeTimeout + "&read_timeout=" + readTimeout
 
-	client, err := sql.Open("clickhouse", dsn)
+	db, err := sql.Open("clickhouse", dsn)
 	if err != nil {
 		klog.Error("connecting to clickhouse: %v", err)
 		return output.FLB_ERROR
 	}
 
-	if err := client.Ping(); err != nil {
-		klog.Errorf("Failed to ping clickhouse: %v", err)
+	if err := db.Ping(); err != nil {
+		if exception, ok := err.(*clickhouse.Exception); ok {
+			klog.Errorf("[%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
+		} else {
+			klog.Errorf("Failed to ping clickhouse: %v", err)
+		}
 		return output.FLB_ERROR
 	}
+    // ==
+	client = db
+
 
 	return output.FLB_OK
 }
@@ -119,42 +157,79 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 //export FLBPluginFlush
 // FLBPluginFlush is called from fluent-bit when data need to be sent. is called from fluent-bit when data need to be sent.
 func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
-	var h codec.Handle = new(codec.MsgpackHandle)
+	rw.Lock()
+	defer rw.Unlock()
 
-	var b []byte
-	var m interface{}
-	var err error
 
-	b = C.GoBytes(data, length)
-	dec := codec.NewDecoderBytes(b, h)
+	// ping
+	if err := client.Ping(); err != nil {
+		if exception, ok := err.(*clickhouse.Exception); ok {
+			klog.Errorf("[%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
+		} else {
+			klog.Errorf("Failed to ping clickhouse: %v", err)
+		}
+		return output.FLB_ERROR
+	}
 
-	var logs []*Log
+	// prepare data
+	//var h codec.Handle = new(codec.MsgpackHandle)
+
+	//var b []byte
+	//var m interface{}
+	//var err error
+
+	//b = C.GoBytes(data, length)
+	//dec := codec.NewDecoderBytes(b, h)
+
+	var ret int
+	var timestampData interface{}
+	var mapData map[interface{}]interface{}
+
+	// Create Fluent Bit decoder
+	dec := output.NewDecoder(data, int(length))
+
+	var logs []Log
 	for {
-		// decode the msgpack data
-		err = dec.Decode(&m)
-		if err != nil {
+		//// decode the msgpack data
+		//err = dec.Decode(&m)
+		//if err != nil {
+		//	break
+		//}
+
+		ret, timestampData, mapData = output.GetRecord(dec)
+		if ret != 0 {
 			break
 		}
 
 		// Get a slice and their two entries: timestamp and map
-		slice := reflect.ValueOf(m)
-		timestampData := slice.Index(0)
-		data := slice.Index(1)
+		//slice := reflect.ValueOf(m)
+		//timestampData := slice.Index(0).Interface()
+		//data := slice.Index(1)
 
-		timestamp, ok := timestampData.Interface().(uint64)
-		if !ok {
-			klog.Errorf("Unable to convert timestamp: %+v", timestampData)
-			return output.FLB_ERROR
+		//timestamp, ok := timestampData.Interface().(uint64)
+		//if !ok {
+		//	klog.Errorf("Unable to convert timestamp: %+v", timestampData)
+		//	return output.FLB_ERROR
+		//}
+		var timestamp time.Time
+		switch t := timestampData.(type) {
+		case output.FLBTime:
+			timestamp = timestampData.(output.FLBTime).Time
+		case uint64:
+			timestamp = time.Unix(int64(t), 0)
+		default:
+			//klog.Infof("msg", "timestamp isn't known format. Use current time.")
+			timestamp = time.Now()
 		}
 
 		// Convert slice data to a real map and iterate
-		mapData := data.Interface().(map[interface{}]interface{})
+		//mapData := data.Interface().(map[interface{}]interface{})
 		flattenData, err := Flatten(mapData, "", UnderscoreStyle)
 		if err != nil {
 			break
 		}
 
-		log := &Log{}
+		log := Log{}
 		for k, v := range flattenData {
 			value := ""
 			switch t := v.(type) {
@@ -169,17 +244,17 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			switch k {
 			case "cluster":
 				log.Cluster = value
-			case "namespace_name":
+			case "kubernetes_namespace_name":
 				log.Namespace = value
-			case "app":
+			case "kubernetes_labels_app":
 				log.App = value
-			case "k8s-app":
+			case "kubernetes_labels_k8s-app":
 				log.App = value
-			case "pod_name":
+			case "kubernetes_pod_name":
 				log.Pod = value
-			case "container_name":
+			case "kubernetes_container_name":
 				log.Container = value
-			case "host":
+			case "kubernetes_host":
 				log.Host = value
 			case "log":
 				log.Log = value
@@ -191,10 +266,18 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			break
 		}
 
-		log.Ts = time.Unix(int64(timestamp), 0)
-
+		//log.Ts = time.Unix(int64(timestamp), 0)
+		log.Ts = timestamp
 		logs = append(logs, log)
 	}
+
+	// sink data
+	buffer = append(buffer, logs...)
+
+	if len(buffer) < batchSize {
+		return output.FLB_OK
+	}
+
 
 	sql := fmt.Sprintf(insertSQL, database, table)
 
@@ -212,7 +295,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		klog.Errorf("prepare statement failure: %s", err.Error())
 		return output.FLB_ERROR
 	}
-	for _, l := range logs {
+	for _, l := range buffer {
 		// ensure tags are inserted in the same order each time
 		// possibly/probably impacts indexing?
 		_, err = smt.Exec(l.Ts, l.Cluster, l.Namespace, l.App, l.Pod, l.Container, l.Host,
@@ -231,10 +314,13 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	}
 
 	end := time.Now()
-	klog.Infof("Exported %d log to clickhouse in %s", len(logs), end.Sub(start))
+	klog.Infof("Exported %d log to clickhouse in %s", len(buffer), end.Sub(start))
+
+	buffer = make([]Log, 0)
 
 	return output.FLB_OK
 }
+
 
 //export FLBPluginExit
 func FLBPluginExit() int {
@@ -243,3 +329,5 @@ func FLBPluginExit() int {
 
 func main() {
 }
+
+

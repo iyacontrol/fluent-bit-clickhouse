@@ -1,0 +1,24 @@
+<yandex>
+    <remote_servers>
+
+        <![CDATA[
+            You can run additional servers simply as
+             ./clickhouse-server -- --path=9001 --tcp_port=9001
+        ]]>
+
+        <scmp-hulk-logs>
+            <shard>
+                <replica>
+                    <host>ck11.logs.ushareit.me</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+            <shard>
+                <replica>
+                    <host>ck12.logs.ushareit.me</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </scmp-hulk-logs>
+    </remote_servers>
+</yandex>

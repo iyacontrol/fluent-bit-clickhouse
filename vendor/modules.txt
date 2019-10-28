@@ -1,5 +1,18 @@
+# github.com/cloudflare/golz4 v0.0.0-20150217214814-ef862a3cdc58
+github.com/cloudflare/golz4
 # github.com/fluent/fluent-bit-go v0.0.0-20190925192703-ea13c021720c
 github.com/fluent/fluent-bit-go/output
+# github.com/kshvakov/clickhouse v1.3.11
+github.com/kshvakov/clickhouse
+github.com/kshvakov/clickhouse/lib/binary
+github.com/kshvakov/clickhouse/lib/column
+github.com/kshvakov/clickhouse/lib/data
+github.com/kshvakov/clickhouse/lib/leakypool
+github.com/kshvakov/clickhouse/lib/protocol
+github.com/kshvakov/clickhouse/lib/types
+github.com/kshvakov/clickhouse/lib/cityhash102
+github.com/kshvakov/clickhouse/lib/lz4
+github.com/kshvakov/clickhouse/lib/writebuffer
 # github.com/ugorji/go/codec v1.1.7
 github.com/ugorji/go/codec
 # k8s.io/klog v1.0.0
