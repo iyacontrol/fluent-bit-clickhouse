@@ -188,7 +188,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	// Create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 
-	var logs []Log
 	for {
 		//// decode the msgpack data
 		//err = dec.Decode(&m)
@@ -268,12 +267,10 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 		//log.Ts = time.Unix(int64(timestamp), 0)
 		log.Ts = timestamp
-		logs = append(logs, log)
+		buffer = append(buffer, log)
 	}
 
 	// sink data
-	buffer = append(buffer, logs...)
-
 	if len(buffer) < batchSize {
 		return output.FLB_OK
 	}
@@ -281,7 +278,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 
 	sql := fmt.Sprintf(insertSQL, database, table)
 
-	start := time.Now()
+	//start := time.Now()
 	// post them to db all at once
 	tx, err := client.Begin()
 	if err != nil {
@@ -313,8 +310,8 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		return output.FLB_ERROR
 	}
 
-	end := time.Now()
-	klog.Infof("Exported %d log to clickhouse in %s", len(buffer), end.Sub(start))
+	//end := time.Now()
+	//klog.Infof("Exported %d log to clickhouse in %s", len(buffer), end.Sub(start))
 
 	buffer = make([]Log, 0)
 
